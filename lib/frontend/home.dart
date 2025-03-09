@@ -1,12 +1,18 @@
+import 'dart:typed_data';
+import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart'; // 🔹 Firestore integration
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:image/image.dart' as img;
+import 'package:firebase_core/firebase_core.dart'; // 🔹 Firebase Core
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:precription/backend/processor.dart'; // 🔹 Firebase Auth
 
 class Home extends StatefulWidget {
-  final List<CameraDescription> cameras;
-  const Home(this.cameras, {Key? key}) : super(key: key);
+  const Home({Key? key}) : super(key: key);
 
   @override
   State<Home> createState() => _HomeState();
@@ -15,32 +21,52 @@ class Home extends StatefulWidget {
 class _HomeState extends State<Home> {
   CameraController? controller;
   bool isCameraInitialized = false;
+  bool isCapturing = false;
   int cameraRotation = 0;
-  bool isCapturing = false; // Prevent multiple captures
+  String extractedText = "No text extracted yet."; // 🔹 Holds extracted text
+
+  // 🔹 Firestore instance
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  // 🔹 Document AI Service
+  late final DocumentAIService _documentAI;
 
   @override
   void initState() {
     super.initState();
     initializeCamera();
+
+    // Initialize Document AI Service
+    _documentAI = DocumentAIService(
+      projectId: "prescription-451914", // Replace with your project ID
+      processorId: "4bd246b055005fa5", // Replace with your processor ID
+      location: "us", // Default region
+    );
   }
 
   Future<void> initializeCamera() async {
-    if (widget.cameras.isEmpty) return;
-    controller = CameraController(
-      widget.cameras[0],
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
     try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        print("No cameras found.");
+        return;
+      }
+
+      controller = CameraController(
+        cameras[0],
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+
       await controller!.initialize();
       if (!mounted) return;
-      final int rotation = widget.cameras[0].sensorOrientation;
+
       setState(() {
-        cameraRotation = rotation;
+        cameraRotation = cameras[0].sensorOrientation;
         isCameraInitialized = true;
       });
     } catch (e) {
-      print("Camera error: $e");
+      print("Camera initialization error: $e");
     }
   }
 
@@ -51,57 +77,100 @@ class _HomeState extends State<Home> {
   }
 
   Future<void> capturePhoto() async {
-    // Prevent duplicate taps if already capturing
-    if (isCapturing) return;
-    setState(() {
-      isCapturing = true;
-    });
+    if (isCapturing || controller == null || !controller!.value.isInitialized) {
+      print("⚠️ Camera is not ready.");
+      return;
+    }
+
+    if (_documentAI == null) {
+      print("⚠️ DocumentAIService is not initialized.");
+      return;
+    }
+
+    setState(() => isCapturing = true);
+
     try {
-      // Turn off the flash before capturing
       await controller!.setFlashMode(FlashMode.off);
       final XFile file = await controller!.takePicture();
 
-      // Show preview dialog with the captured image
       bool? save = await showDialog<bool>(
         context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('Preview'),
-            content: Image.file(File(file.path)),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop(false); // Cancel saving
-                },
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop(true); // Save image
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          );
-        },
+        builder:
+            (context) => AlertDialog(
+              title: const Text('Preview'),
+              content: Image.file(File(file.path)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
       );
-      if (save == null || !save) {
-        // User cancelled: delete the captured file
-        final fileToDelete = File(file.path);
-        if (await fileToDelete.exists()) {
-          await fileToDelete.delete();
+
+      if (save == true) {
+        final savedFile = await saveImageToAppFolder(file);
+        if (savedFile == null) {
+          print("⚠️ Failed to save image.");
+          return;
         }
-        print("Photo capture cancelled, file deleted.");
+
+        final results = await _documentAI.processImage(savedFile);
+        setState(() {
+          extractedText = results.join(', '); // Update extracted text
+        });
+        print("✅ Extracted Text: ${results.join(', ')}");
       } else {
-        print("Photo saved: ${file.path}");
-        // Here you could move the file to permanent storage if desired.
+        final fileToDelete = File(file.path);
+        if (await fileToDelete.exists()) await fileToDelete.delete();
+        print("❌ Photo capture cancelled");
       }
     } catch (e) {
-      print("Capture error: $e");
+      print("⛔ Capture error: $e");
     } finally {
-      setState(() {
-        isCapturing = false;
-      });
+      setState(() => isCapturing = false);
+    }
+  }
+
+  Future<File?> saveImageToAppFolder(XFile file) async {
+    try {
+      final directory = await getExternalStorageDirectory();
+      if (directory == null) {
+        print("External storage directory not found.");
+        return null;
+      }
+
+      final folderPath = '${directory.path}/Pictures/CameraImages';
+      final folder = Directory(folderPath);
+      if (!await folder.exists()) {
+        await folder.create(recursive: true);
+      }
+
+      final newFilePath =
+          '$folderPath/${DateTime.now().millisecondsSinceEpoch}.jpg';
+      File originalFile = File(file.path);
+
+      List<int> imageBytes = await originalFile.readAsBytes();
+      img.Image? decodedImage = img.decodeImage(Uint8List.fromList(imageBytes));
+      if (decodedImage == null) {
+        print("Error: Image could not be decoded!");
+        return null;
+      }
+
+      Uint8List encodedImage = Uint8List.fromList(
+        img.encodeJpg(decodedImage, quality: 90),
+      );
+      File newFile = File(newFilePath)..writeAsBytesSync(encodedImage);
+
+      print("Photo saved successfully at: $newFilePath");
+      return newFile;
+    } catch (e) {
+      print("Error saving image: $e");
+      return null;
     }
   }
 
@@ -109,7 +178,12 @@ class _HomeState extends State<Home> {
     final picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
-      print("Selected image: ${image.path}");
+      File selectedFile = File(image.path);
+      final results = await _documentAI.processImage(selectedFile);
+      setState(() {
+        extractedText = results.join(', '); // Update extracted text
+      });
+      print("✅ Extracted Text: ${results.join(', ')}");
     }
   }
 
@@ -122,12 +196,29 @@ class _HomeState extends State<Home> {
     return Scaffold(
       body: Stack(
         children: [
-          isCameraInitialized
-              ? FullScreenCameraPreview(
-                controller: controller!,
-                rotation: cameraRotation,
-              )
+          isCameraInitialized && controller != null
+              ? CameraPreview(controller!)
               : const Center(child: CircularProgressIndicator()),
+
+          // 🔹 Overlay text display
+          Positioned(
+            top: 50,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                extractedText,
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+
           Positioned(
             bottom: 40,
             left: 0,
@@ -163,37 +254,6 @@ class _HomeState extends State<Home> {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class FullScreenCameraPreview extends StatelessWidget {
-  final CameraController controller;
-  final int rotation;
-  const FullScreenCameraPreview({
-    required this.controller,
-    required this.rotation,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (!controller.value.isInitialized) {
-      return const Center(child: Text('Camera not initialized'));
-    }
-
-    final size = MediaQuery.of(context).size;
-    final deviceRatio = size.width / size.height;
-    final previewSize = controller.value.previewSize!;
-    final cameraAspectRatio = previewSize.height / previewSize.width;
-
-    final xScale = cameraAspectRatio / deviceRatio;
-
-    return Center(
-      child: Transform(
-        alignment: Alignment.center,
-        transform: Matrix4.rotationZ(math.pi / 180),
-        child: Transform.scale(scale: xScale, child: CameraPreview(controller)),
       ),
     );
   }

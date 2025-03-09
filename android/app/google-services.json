@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "236103546345",
-    "project_id": "precription-db144",
-    "storage_bucket": "precription-db144.firebasestorage.app"
+    "project_number": "671444956299",
+    "project_id": "precription",
+    "storage_bucket": "precription.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:236103546345:android:5b364c0e9acf7daa7a0778",
+        "mobilesdk_app_id": "1:671444956299:android:a8fda676356778b08bd08e",
         "android_client_info": {
           "package_name": "com.example.precription"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAl11Oy5-MqUlfCQPQENTRU_HT-9w5P6-8"
+          "current_key": "AIzaSyCGlUhtljAIpQgAEZmz9CdwLjjoOtQ0FWs"
         }
       ],
       "services": {

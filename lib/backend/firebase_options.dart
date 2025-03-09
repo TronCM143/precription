@@ -53,10 +53,10 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAl11Oy5-MqUlfCQPQENTRU_HT-9w5P6-8',
-    appId: '1:236103546345:android:5b364c0e9acf7daa7a0778',
-    messagingSenderId: '236103546345',
-    projectId: 'precription-db144',
-    storageBucket: 'precription-db144.firebasestorage.app',
+    apiKey: 'AIzaSyCGlUhtljAIpQgAEZmz9CdwLjjoOtQ0FWs',
+    appId: '1:671444956299:android:a8fda676356778b08bd08e',
+    messagingSenderId: '671444956299',
+    projectId: 'precription',
+    storageBucket: 'precription.firebasestorage.app',
   );
 }
